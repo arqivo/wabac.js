@@ -107,47 +107,36 @@ function getHTMLNotFound(
 
 </div>
 
-
-  <h2>Archived Page Not Found</h2>
-  <p>${msg || "Sorry, this page was not found in this archive:"}</p>
-  <p><code id="url" style="word-break: break-all; font-size: larger"></code></p>
-  ${
-    liveRedirectOnNotFound && request.mode === "navigate"
-      ? `
-  <p>Redirecting to live page now... (If this URL is a file download, the download should have started).</p>
   <script>
-  window.top.location.href = window.requestURL;
-  </script>
-  `
-      : `
-  `
-  }
-  <p id="goback" style="display: none"><a href="#" onclick="window.history.back()">Go Back</a> to the previous page.</a></p>
-  
-  <p>
-  <a id="livelink" target="_blank" href="">Load the live page</a> in a new tab (or download the file, if this URL points to a file).
-  </p>
 
-  <script>
-//   document.querySelector("#url").innerText = window.requestURL;
-//   document.querySelector("#livelink").href = window.requestURL;
-  let isTop = true;
-  try {
-    if (window.parent._WB_wombat_location) {
-      isTop = false;
+    const inIframe = window.self !== window.top;
+
+    if (!inIframe) {
+
+        // Get collection from URL
+        const path = window.location.pathname;
+        const coll = path.startsWith('/w/') ? path.split('/')[2] : '';
+
+        const url = '${requestURL}';
+        const encodedUrl = url === decodeURIComponent(url) ? encodeURIComponent(url) : url;
+        const redirectUri =  window.location.origin + '?action=redirect&coll=' + coll + '&url=' + encodedUrl + '&timestamp=${requestTS}';
+        
+        // console.log('Should redirect to: ', redirectUri);
+        
+        window.location.href = redirectUri;
+
     }
-  } catch (e) {
 
-  }
-  if (isTop) {
-    document.querySelector("#goback").style.display = "";
 
-    window.parent.postMessage({
-      wb_type: "archive-not-found",
-      url: "${requestURL}",
-      ts: "${requestTS}"
-    }, "*");
-  }
+    if (inIframe) {
+
+        window.parent.postMessage({
+        wb_type: "archive-not-found",
+        url: "${requestURL}",
+        ts: "${requestTS}"
+        }, "*");
+    }
+
   </script>
   </body>
   </html>

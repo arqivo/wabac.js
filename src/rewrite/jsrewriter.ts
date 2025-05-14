@@ -312,6 +312,11 @@ if (!self.__WB_pmw) { self.__WB_pmw = function(obj) { this.__WB_source = obj; re
   // [TODO]
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   rewrite(text: string, opts: Record<string, any>) {
+
+    if (text && text.indexOf('aq_no_wombat_rewrite') >= 0) {
+        return text;
+    }
+
     // [TODO]
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     opts = opts || {};
@@ -355,10 +360,13 @@ if (!self.__WB_pmw) { self.__WB_pmw = function(obj) { this.__WB_source = obj; re
       newText = newText.replace(/\n/g, " ");
     }
 
+    
+
     if (wrapGlobals) {
       let hoistGlobals = "";
       if (newText) {
         try {
+            
           hoistGlobals = this.parseGlobals(newText);
           // [TODO]
           // eslint-disable-next-line @typescript-eslint/no-unused-vars

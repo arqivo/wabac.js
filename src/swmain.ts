@@ -421,17 +421,17 @@ export class SWReplay {
     // if request is to '<origin>/newPath but referrer is from <origin>/collection/<url>/<path>,
     // redirect to <origin>/collection/<url>/newPath
     // correct rewriting should prevent this, but add as secondary fallback
-    if (
-      !this.topFramePassthrough &&
-      !url.startsWith(this.staticPrefix) &&
-      request.referrer.startsWith(this.replayPrefix)
-    ) {
-      const newUrl = resolveFullUrlFromReferrer(url, request.referrer);
-      if (!newUrl) {
-        return notFound(request);
-      }
-      return Response.redirect(newUrl);
-    }
+    // if (
+    //   !this.topFramePassthrough &&
+    //   !url.startsWith(this.staticPrefix) &&
+    //   request.referrer.startsWith(this.replayPrefix)
+    // ) {
+    //   const newUrl = resolveFullUrlFromReferrer(url, request.referrer);
+    //   if (!newUrl) {
+    //     return notFound(request);
+    //   }
+    //   return Response.redirect(newUrl);
+    // }
 
     // only cache: urls in the root directory (no more slashes)
     if (

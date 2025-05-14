@@ -138,7 +138,8 @@ export class Collection {
     let requestTS = request.timestamp;
 
     if (!request.mod) {
-      return await this.makeTopFrame(requestURL, requestTS);
+        // CUSTOM
+    //   return await this.makeTopFrame(requestURL, requestTS);
     }
 
     if (!this.noPostToGet) {
@@ -660,6 +661,7 @@ body {
 </style>
 ${this.injectRelCanon ? `<link rel="canonical" href="${url}"/>` : ""}
 <script>
+
   wbinfo = {};
   wbinfo.top_url = "${topUrl}";
   // Fast Top-Frame Redirect
@@ -668,7 +670,7 @@ ${this.injectRelCanon ? `<link rel="canonical" href="${url}"/>` : ""}
     loc = decodeURI(loc);
 
     if (loc != decodeURI(wbinfo.top_url)) {
-        window.location.href = wbinfo.top_url + window.location.hash;
+        window.location.href = window.location.origin + '?action=redirect&coll=${coll}&url=${url}&timestamp=${timestamp}';
     }
   }
   wbinfo.url = "${url}";
