@@ -77,11 +77,37 @@ function getHTMLNotFound(
   <!doctype html>
   <html>
   <head>
-  <script>
-  window.requestURL = "${requestURL}";
-  </script>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+
   </head>
-  <body style="font-family: sans-serif">
+  <body>
+
+
+
+
+<div class="flex justify-center h-screen sm:items-center">
+
+    <div class="inline-block max-w-4xl px-8 py-6 font-medium text-center bg-white rounded-md">        
+
+        <div class="font-bold text sm:text-4xl">Dit gedeelte wordt niet gearchiveerd</div>
+        <div class="text-gray-400">${requestURL}</div>
+
+        <div class="hidden mt-0 sm:block">Deze pagina of dit onderdeel van de website valt buiten het webarchief. Gebruik de onderstaande knop om de URL in een nieuw venster te openen en de actuele versie te bekijken.</div>
+
+
+        <a href="${requestURL}" class="hidden sm:inline-flex  mt-10 items-center gap-x-1.5 rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="-ml-0.5 h-5 w-5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+            </svg>
+            Bekijk actuele versie
+        </a>        
+
+    </div>
+
+</div>
+
+
   <h2>Archived Page Not Found</h2>
   <p>${msg || "Sorry, this page was not found in this archive:"}</p>
   <p><code id="url" style="word-break: break-all; font-size: larger"></code></p>
@@ -103,8 +129,8 @@ function getHTMLNotFound(
   </p>
 
   <script>
-  document.querySelector("#url").innerText = window.requestURL;
-  document.querySelector("#livelink").href = window.requestURL;
+//   document.querySelector("#url").innerText = window.requestURL;
+//   document.querySelector("#livelink").href = window.requestURL;
   let isTop = true;
   try {
     if (window.parent._WB_wombat_location) {
@@ -118,7 +144,7 @@ function getHTMLNotFound(
 
     window.parent.postMessage({
       wb_type: "archive-not-found",
-      url: window.requestURL,
+      url: "${requestURL}",
       ts: "${requestTS}"
     }, "*");
   }
