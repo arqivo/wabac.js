@@ -2,6 +2,7 @@ import { getProxyNotFoundResponse } from "./notfound";
 import { type ArchiveRequest } from "./request";
 import { ArchiveResponse } from "./response";
 import { type ExtraConfig, type DBStore } from "./types";
+import { RequestTracker } from "./requesttracker";
 
 declare let self: ServiceWorkerGlobalScope;
 
@@ -20,6 +21,8 @@ export class LiveProxy implements DBStore {
   hostProxyOnly: boolean;
 
   messageOnProxyErrors: boolean;
+  broadcastChannel: any;
+  requestTracker: RequestTracker;
 
   constructor(
     extraConfig?: ExtraConfig,
@@ -52,6 +55,10 @@ export class LiveProxy implements DBStore {
     }
 
     this.hostProxyOnly = hostProxyOnly;
+
+    this.broadcastChannel = new BroadcastChannel("arqivo-messages");
+    this.requestTracker = new RequestTracker(this.broadcastChannel);
+
   }
 
   async getAllPages() {
@@ -114,6 +121,11 @@ export class LiveProxy implements DBStore {
       return null;
     }
 
+    // Detect new page load: iframe destination indicates the first request
+    if (this.requestTracker.shouldReset(request.destination)) {
+      this.requestTracker.reset();
+    }
+
     let body: Uint8Array | null = null;
 
     const isPOST =
@@ -129,14 +141,43 @@ export class LiveProxy implements DBStore {
       }
     }
 
-    let response = await fetch(fetchUrl, {
-      method: request.method,
-      body,
-      headers,
-      credentials,
-      mode: "cors",
-      redirect: "follow",
-    });
+    let requestId = crypto.randomUUID();
+
+    // Track request start
+    this.requestTracker.trackRequestStart(
+      requestId,
+      fetchUrl,
+      request.method,
+      request.destination,
+    );
+
+    let response: Response;
+    let fetchError: Error | null = null;
+
+    try {
+      response = await fetch(fetchUrl, {
+        method: request.method,
+        body,
+        headers,
+        credentials,
+        mode: "cors",
+        redirect: "follow",
+      });
+    } catch (error) {
+      // Fetch failed (network error, CORS, etc.)
+      fetchError = error as Error;
+      // Track request completion even on error
+      this.requestTracker.trackRequestComplete(
+        requestId,
+        fetchUrl,
+        request.method,
+        0,
+        fetchError.message,
+      );
+
+      // Re-throw the error so it can be handled upstream
+      throw error;
+    }
 
     let noRW = false;
 
@@ -155,6 +196,14 @@ export class LiveProxy implements DBStore {
         response.status,
       );
     }
+
+    // Track request completion
+    this.requestTracker.trackRequestComplete(
+      requestId,
+      fetchUrl,
+      request.method,
+      response.status,
+    );
 
     if (
       response.status > 400 &&
