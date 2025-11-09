@@ -1,4 +1,5 @@
-import { ProxyRewriter, Rewriter } from "./rewrite";
+import { ProxyRewriter, Rewriter, TO_MP } from "./rewrite";
+import { DISABLE_MEDIASOURCE_SCRIPT } from "./rewrite/dsruleset";
 
 import {
   getTS,
@@ -6,8 +7,8 @@ import {
   parseSetCookie,
   handleAuthNeeded,
   REPLAY_TOP_FRAME_NAME,
-  proxyAllowPaths,
   getCSP,
+  addProxyAllowPaths,
 } from "./utils";
 
 import { ArchiveResponse } from "./response";
@@ -92,8 +93,6 @@ export class Collection {
 
     this.coHeaders = extraConfig.coHeaders || false;
 
-    this.csp = extraConfig.csp || getCSP() + this.name + "/";
-
     this.injectRelCanon = extraConfig.injectRelCanon || false;
 
     this.baseFramePrefix = extraConfig.baseUrlSourcePrefix!;
@@ -111,15 +110,17 @@ export class Collection {
 
     this.proxyBannerUrl = extraConfig.proxyBannerUrl || "";
     if (this.proxyBannerUrl) {
-      proxyAllowPaths.add(this.proxyBannerUrl);
+      addProxyAllowPaths([this.proxyBannerUrl]);
     }
 
     // support root collection hashtag nav
     if (this.config.root) {
       this.isRoot = true;
+      this.csp = extraConfig.csp || getCSP();
     } else {
       this.prefix += this.name + "/";
       this.isRoot = false;
+      this.csp = extraConfig.csp || getCSP() + this.name + "/";
     }
 
     this.staticPrefix = prefixes.static;
@@ -191,7 +192,7 @@ export class Collection {
       if (await handleAuthNeeded(e, this.config)) {
         return notFound(
           request.request,
-          '<p style="margin: auto">Please wait, this page will reload after authentication...</p>',
+          "Please wait, this page will reload after authentication...",
           401,
         );
       }
@@ -273,20 +274,23 @@ export class Collection {
       );
     };
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const workerInsertFunc = (text: string, opts?: any) => {
-      if (opts?.isModule) {
-        return text;
+    const workerInsertFunc = (isModule: boolean) => {
+      const newWBWombat = `new WBWombat(
+        {"prefix": "${basePrefixTS}",
+         "mod": "wkr_",
+         "originalURL": "${requestURL}"
+        })`;
+
+      if (isModule) {
+        return `import '${this.staticPrefix}wombatWorkers.js'; if (!self.__wb_wombat) { self.__wb_wombat = ${newWBWombat} }`;
       }
-      return (
-        `
-      (function() { self.importScripts('${this.staticPrefix}wombatWorkers.js');\
-          new WBWombat({'prefix': '${basePrefixTS}/', 'prefixMod': '${basePrefixTS}wkrf_/', 'originalURL': '${requestURL}'});\
-      })();` + text
-      );
+      return `
+      { if (!self.__wb_wombat) { self.importScripts('${this.staticPrefix}wombatWorkers.js'); \
+        self.__wb_wombat = ${newWBWombat};}\
+      }`;
     };
 
-    const mod = request.mod;
+    const mod = TO_MP.includes(request.mod) ? "mp_" : request.mod;
 
     const noRewrite = mod === "id_" || mod === "wkrf_";
 
@@ -334,6 +338,10 @@ export class Collection {
 
       const seconds = getSecondsStr(response.date);
 
+      const extraOpts = response.extraOpts;
+
+      const disableMSE = extraOpts?.disableMSE;
+
       return `
 <!-- WB Insert -->
 <script>
@@ -357,6 +365,7 @@ ${
 <script src="${this.proxyPrefix}${this.proxyBannerUrl}"></script>`
     : ``
 }
+${disableMSE ? DISABLE_MEDIASOURCE_SCRIPT : ""}
 <!-- End WB Insert -->
     `;
     };
@@ -635,14 +644,14 @@ window.home = "${this.rootPrefix}";
     const presetCookieStr = this.getCookiePreset(response, scheme);
 
     const pixelRatio =
-      // @ts-expect-error [TODO] - TS4111 - Property 'pixelRatio' comes from an index signature, so it must be accessed with ['pixelRatio']. | TS4111 - Property 'pixelRatio' comes from an index signature, so it must be accessed with ['pixelRatio'].
       extraOpts && Number(extraOpts.pixelRatio) ? extraOpts.pixelRatio : 2;
-    // @ts-expect-error [TODO] - TS4111 - Property 'storage' comes from an index signature, so it must be accessed with ['storage']. | TS4111 - Property 'storage' comes from an index signature, so it must be accessed with ['storage'].
 
     const storage = extraOpts?.storage
-      ? // @ts-expect-error [TODO] - TS4111 - Property 'storage' comes from an index signature, so it must be accessed with ['storage']. | TS4111 - Property 'storage' comes from an index signature, so it must be accessed with ['storage'].
-        JSON.stringify(extraOpts.storage)
+      ? JSON.stringify(extraOpts.storage)
       : '""';
+
+    const disableMSE = extraOpts?.disableMSE;
+
     return `
 <!-- WB Insert -->
 ${
@@ -711,6 +720,7 @@ ${this.injectRelCanon ? `<link rel="canonical" href="${url}"/>` : ""}
   if (window && window._WBWombatInit) {
     window._WBWombatInit(wbinfo);
   }
+    ${disableMSE ? DISABLE_MEDIASOURCE_SCRIPT : ""}
 </script>
 ${this.injectScripts.map((script) => `<script src='${this.proxyPrefix}${script}'> </script>`).join("")}
 <!-- End WB Insert -->

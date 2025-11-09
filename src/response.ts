@@ -3,12 +3,11 @@ import {
   isNullBodyStatus,
   decodeLatin1,
   encodeLatin1,
-  MAX_STREAM_CHUNK_SIZE,
   tsToDate,
   getStatusText,
-  INITIAL_STREAM_CHUNK_SIZE,
 } from "./utils";
 import { Buffer } from "buffer";
+import { type ExtraOpts } from "./types";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -20,9 +19,7 @@ type ArchiveResponseOpts = {
   headers: Headers;
   url: string;
   date: Date;
-  // [TODO]
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  extraOpts?: Record<string, any> | null;
+  extraOpts?: ExtraOpts | null;
   noRW?: boolean;
   isLive?: boolean;
   updateTS?: string | null;
@@ -128,9 +125,7 @@ class ArchiveResponse {
   statusText: string;
   url: string;
   date: Date;
-  // [TODO]
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  extraOpts: Record<string, any> | null;
+  extraOpts: ExtraOpts | null;
   headers: Headers;
   noRW: boolean;
   isLive: boolean;
@@ -170,7 +165,10 @@ class ArchiveResponse {
     this.updateTS = updateTS;
   }
 
-  async getText(isUTF8 = false): Promise<{ bomFound: boolean; text: string }> {
+  async getText(
+    isUTF8 = false,
+    defaultEmptyIfNoBom = false,
+  ): Promise<{ bomFound: boolean; text: string }> {
     const buff = await this.getBuffer();
     if (typeof buff === "string") {
       return { bomFound: false, text: buff };
@@ -201,7 +199,11 @@ class ArchiveResponse {
     // if no BOM, go by 'isUTF8' param
     return {
       bomFound: false,
-      text: isUTF8 ? decoder.decode(buff) : decodeLatin1(buff),
+      text: defaultEmptyIfNoBom
+        ? ""
+        : isUTF8
+          ? decoder.decode(buff)
+          : decodeLatin1(buff),
     };
   }
 
@@ -233,43 +235,6 @@ class ArchiveResponse {
       this.reader = new AsyncIterReader(reader.getReader());
       this.buffer = null;
     }
-  }
-
-  expectedLength() {
-    if (this.buffer) {
-      return this.buffer.length;
-    }
-    //TODO
-    //  else if (this.reader && this.reader.reader) {
-    //   return this.reader.reader.length;
-    // }
-    return 0;
-  }
-
-  createIter() {
-    const buffer = this.buffer;
-    const reader = this.reader;
-
-    async function* iter() {
-      if (buffer) {
-        let i = 0;
-
-        yield buffer.slice(0, i + INITIAL_STREAM_CHUNK_SIZE);
-        i += INITIAL_STREAM_CHUNK_SIZE;
-
-        for (i; i < buffer.length; i += MAX_STREAM_CHUNK_SIZE) {
-          yield buffer.slice(i, i + MAX_STREAM_CHUNK_SIZE);
-        }
-      } else if (reader) {
-        yield* reader;
-      }
-    }
-
-    return iter();
-  }
-
-  async *[Symbol.asyncIterator]() {
-    yield* this.createIter();
   }
 
   setRange(range: string) {

@@ -23,6 +23,7 @@ import {
 } from "./request";
 import { type ExtraConfig, type CollMetadata } from "./types";
 import { notFound } from "./notfound";
+import { setUseHashCHeck } from "./wacz/ziprangereader";
 
 const CACHE_PREFIX = "wabac-";
 const IS_AJAX_HEADER = "x-wabac-is-ajax-req";
@@ -290,6 +291,10 @@ export class SWReplay {
       defaultConfig.adblockUrl = sp.get("adblockUrl") || "";
     }
 
+    if (sp.get("useHashCheck") === "1") {
+      setUseHashCHeck(true);
+    }
+
     const prefixes: Prefixes = {
       static: this.staticPrefix,
       root: this.prefix,
@@ -321,10 +326,13 @@ export class SWReplay {
 
     self.addEventListener("activate", (event) => {
       event.waitUntil(self.clients.claim());
-      console.log("Activate!");
+    //   console.log("Activate!");
     });
 
     self.addEventListener("fetch", (event) => {
+
+        // console.log('SW fetch event:', event);
+
       event.respondWith(this.handleFetch(event));
     });
 

@@ -1,5 +1,3 @@
-import LinkHeader from "http-link-header";
-
 import { isAjaxRequest } from "../utils";
 
 import { decodeResponse } from "./decoder";
@@ -25,7 +23,7 @@ export { ArchiveResponse } from "../response";
 export { rewriteDASH, rewriteHLS } from "./rewriteVideo";
 
 // ===========================================================================
-const STYLE_REGEX = /(url\s*\(\s*[\\"']*)([^)'"]+)([\\"']*\s*\))/gi;
+const STYLE_REGEX = /(url\s*\(\s*[\\"']*)([^)'"]+)([\\"']*\s*\)?)/gi;
 
 const IMPORT_REGEX = /(@import\s*[\\"']*)([^)'";]+)([\\"']*\s*;?)/gi;
 
@@ -45,15 +43,19 @@ export const baseRules = new DomainSpecificRuleSet(RxRewriter);
 // HTML Rx Rewriter (only used externally for now)
 export const htmlRules = new DomainSpecificRuleSet(RxRewriter, HTML_ONLY_RULES);
 
+// convert these mod types back to mp_
+export const TO_MP = ["if_", "fr_", "ln_", "oe_", "mt_"];
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type InsertFunc = (url: string, opts?: any) => string;
+type HeadInsertFunc = (url: string, opts?: any) => string;
+type WorkerInsertFunc = (isModule: boolean) => string;
 
 type RewriterOpts = {
   baseUrl: string;
   prefix: string;
   responseUrl?: string;
-  workerInsertFunc?: InsertFunc | null;
-  headInsertFunc?: InsertFunc | null;
+  workerInsertFunc?: WorkerInsertFunc | null;
+  headInsertFunc?: HeadInsertFunc | null;
   urlRewrite?: boolean;
   contentRewrite?: boolean;
   decode?: boolean;
@@ -86,9 +88,10 @@ export class Rewriter {
   url: string;
   responseUrl: string;
   isCharsetUTF8: boolean;
+  isCharsetDetected = false;
 
-  headInsertFunc: InsertFunc | null;
-  workerInsertFunc: InsertFunc | null;
+  headInsertFunc: HeadInsertFunc | null;
+  workerInsertFunc: WorkerInsertFunc | null;
 
   _jsonpCallback: string | boolean | null;
 
@@ -155,6 +158,7 @@ export class Rewriter {
             .toLowerCase()
             .replace("charset=", "")
             .replace("-", "") === "utf8";
+        this.isCharsetDetected = true;
       }
     }
     mime = mime.toLowerCase();
@@ -170,7 +174,7 @@ export class Rewriter {
           return "css";
 
         case "script":
-          return this.getScriptRewriteMode(mime, url, "js");
+          return this.getScriptRewriteMode(mime, url, request.mod, "js");
 
         case "worker":
           return "js-worker";
@@ -204,7 +208,7 @@ export class Rewriter {
       // fallthrough
 
       default:
-        return this.getScriptRewriteMode(mime, url);
+        return this.getScriptRewriteMode(mime, url, request.mod, "");
     }
   }
 
@@ -231,7 +235,7 @@ export class Rewriter {
     return false;
   }
 
-  getScriptRewriteMode(mime: string, url: string, defaultType = "") {
+  getScriptRewriteMode(mime: string, url: string, mod = "", defaultType = "") {
     switch (mime) {
       case "text/javascript":
       case "application/javascript":
@@ -239,7 +243,13 @@ export class Rewriter {
         if (this.parseJSONPCallback(url)) {
           return "jsonp";
         }
-        return url.endsWith(".json") ? "json" : "js";
+        if (url.endsWith(".json")) {
+          return "json";
+        }
+        if (mod === "wkr_" || mod === "wkrm_") {
+          return "js-worker";
+        }
+        return "js";
 
       case "application/json":
         return "json";
@@ -321,10 +331,10 @@ export class Rewriter {
         break;
 
       case "js-worker":
-        if (request.mod === "wkrm_") {
+        if (request.mod === "wkrm_" || request.mod === "esm_") {
           opts.isModule = true;
         }
-        rwFunc = this.workerInsertFunc;
+        rwFunc = this.rewriteJSWorker;
         break;
 
       case "jsonp":
@@ -482,7 +492,7 @@ export class Rewriter {
 
   // HTML
   async rewriteHtml(response: ArchiveResponse): Promise<ArchiveResponse> {
-    const htmlRW = new HTMLRewriter(this, this.isCharsetUTF8);
+    const htmlRW = new HTMLRewriter(this);
     return htmlRW.rewrite(response);
   }
 
@@ -527,6 +537,19 @@ export class Rewriter {
     return dsRewriter.rewrite(text, opts);
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  rewriteJSWorker(text: string, opts: Record<string, any>): string {
+    opts["isWorker"] = true;
+    const isModule = opts["isModule"] as boolean;
+    const moduleInsert = this.workerInsertFunc!(isModule);
+    if (isModule) {
+      opts["moduleInsert"] = moduleInsert;
+      return this.rewriteJS(text, opts);
+    } else {
+      return moduleInsert + this.rewriteJS(text, opts);
+    }
+  }
+
   // JSON
   // [TODO]
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -546,45 +569,35 @@ export class Rewriter {
 
   // Importmap
   rewriteImportmap(text: string) {
+    type ImportMap = {
+      imports?: Record<string, string>;
+      scopes?: Record<string, Record<string, string>>;
+    };
+
+    const rewriteESM = (url: string) => {
+      return this.rewriteUrl(url).replace("mp_/", "esm_/");
+    };
+
     try {
-      const root = JSON.parse(text);
+      const root = JSON.parse(text) as ImportMap;
 
-      // [TODO]
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const imports: Record<string, any> = {};
-      const output = { imports };
+      const imports: Record<string, string> = {};
+      const output: ImportMap = { imports };
 
-      // [TODO]
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
       for (const [key, value] of Object.entries(root.imports || {})) {
-        imports[this.rewriteUrl(key).replace("mp_/", "esm_/")] = value;
+        imports[rewriteESM(key)] = rewriteESM(value);
       }
 
       if (root.scopes) {
-        // [TODO]
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const scopes: Record<string, any> = {};
-        for (const [scopeKey, scopeValue] of Object.entries(
-          // [TODO]
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-          root.scopes || {},
-        )) {
-          // [TODO]
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const newScope: Record<string, any> = {};
-          for (const [key, value] of Object.entries(
-            // [TODO]
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            scopeValue as Record<string, any>,
-          )) {
-            newScope[this.rewriteUrl(key).replace("mp_/", "esm_/")] = value;
+        const scopes: Record<string, Record<string, string>> = {};
+        for (const [scopeKey, scopeValue] of Object.entries(root.scopes)) {
+          const newScope: Record<string, string> = {};
+          for (const [key, value] of Object.entries(scopeValue)) {
+            newScope[rewriteESM(key)] = rewriteESM(value);
           }
-          scopes[this.rewriteUrl(scopeKey).replace("mp_/", "esm_/")] = newScope;
+          scopes[rewriteESM(scopeKey)] = newScope;
         }
-        // @ts-expect-error [TODO] - TS4111 - Property 'scopes' comes from an index signature, so it must be accessed with ['scopes'].
-        // [TODO]
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (output as Record<string, any>).scopes = scopes;
+        output.scopes = scopes;
       }
 
       return JSON.stringify(output, null, 2);
@@ -798,8 +811,8 @@ export class Rewriter {
           break;
 
         case "link":
-          if (urlRewrite && !isAjax) {
-            new_headers.append(key, this.rewriteLinkHeader(value));
+          if (urlRewrite) {
+            new_headers.append(key, this.rewriteLinkHeader(value, isAjax));
           } else {
             new_headers.append(key, value);
           }
@@ -813,25 +826,20 @@ export class Rewriter {
     return new_headers;
   }
 
-  rewriteLinkHeader(value: string) {
+  rewriteLinkHeader(value: string, preloadOnly = false) {
     try {
-      const parsed = LinkHeader.parse(value);
-
-      for (const entry of parsed.refs) {
-        if (entry.uri) {
-          entry.uri = this.rewriteUrl(entry.uri);
-        }
-      }
-
-      // [TODO]
-      // eslint-disable-next-line @typescript-eslint/no-base-to-string
-      return parsed.toString();
-      // [TODO]
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    } catch (e) {
+      value = value.replace(
+        preloadOnly
+          ? /<(.*?)>(?=[^,]+rel=["']?(?:preload|modulepreload|stylesheet))/g
+          : /<(.*?)>/g,
+        (_, uri: string) => {
+          return "<" + this.rewriteUrl(uri) + ">";
+        },
+      );
+    } catch (_e) {
       console.warn("Error parsing link header: " + value);
-      return value;
     }
+    return value;
   }
 }
 
@@ -915,7 +923,7 @@ export class ProxyRewriter extends Rewriter {
   override async rewriteHtml(
     response: ArchiveResponse,
   ): Promise<ArchiveResponse> {
-    const htmlRW = new ProxyHTMLRewriter(this, this.isCharsetUTF8);
+    const htmlRW = new ProxyHTMLRewriter(this);
     return htmlRW.rewrite(response);
   }
 

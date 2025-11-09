@@ -95,7 +95,7 @@ export class LiveProxy implements DBStore {
         parsedUrl = new URL(url);
       }
       return this.prefix + parsedUrl.pathname + parsedUrl.search;
-    } else if (this.isLive || !request.timestamp) {
+    } else if (this.isLive || (!request.timestamp && !this.archivePrefix)) {
       return this.prefix + url;
     } else {
       return (
@@ -122,8 +122,9 @@ export class LiveProxy implements DBStore {
     }
 
     // Detect new page load: iframe destination indicates the first request
-    if (this.requestTracker.shouldReset(request.destination)) {
-      this.requestTracker.reset();
+    // Reset on navigation events (mode === "navigate") which are main page loads
+    if (this.requestTracker.shouldReset(request.destination, request.mode)) {
+      this.requestTracker.reset(request.url);
     }
 
     let body: Uint8Array | null = null;
@@ -149,7 +150,10 @@ export class LiveProxy implements DBStore {
       fetchUrl,
       request.method,
       request.destination,
+      request.referrer,
     );
+
+    // console.log('SW request object:', request);
 
     let response: Response;
     let fetchError: Error | null = null;
@@ -218,7 +222,7 @@ export class LiveProxy implements DBStore {
       // was a redirect, issue a redirect to the exact URL
       const fullFetchURL = new URL(fetchUrl, self.location.href).href;
 
-      if (response.url !== fullFetchURL) {
+      if (response.ok && response.url && response.url !== fullFetchURL) {
         const inx = response.url.indexOf("/http");
         const actualUrl = response.url.slice(inx + 1);
         // ensure actual URL is different, not just timestamp

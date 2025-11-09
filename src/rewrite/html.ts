@@ -19,13 +19,16 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 // ===========================================================================
-const META_REFRESH_REGEX = /([\d.]+\s*;\s*(?:url\s*=)\s*)['"]?(.+)['"]?(\s*)/im;
+const META_REFRESH_REGEX =
+  /([\d.]+\s*;\s*(?:url\s*=)?\s*)['"]?(.+)['"]?(\s*)/im;
 
 const DATA_RW_PROTOCOLS = ["http://", "https://", "//"];
 
 const defmod = "mp_";
 
 const MAX_HTML_REWRITE_SIZE = 50000000;
+
+const UTF_MATCH = ["utf-8", "utf8"];
 
 const rewriteTags: Record<string, Record<string, string>> = {
   a: { href: "ln_" },
@@ -99,8 +102,9 @@ export class HTMLRewriter {
   rule: TextNodeRewriteRule | null = null;
   ruleMatch: RegExpMatchArray | null = null;
   isCharsetUTF8: boolean;
+  detectedCharset = "";
 
-  constructor(rewriter: Rewriter, isCharsetUTF8 = false) {
+  constructor(rewriter: Rewriter) {
     this.rewriter = rewriter;
     this.rule = null;
 
@@ -113,7 +117,35 @@ export class HTMLRewriter {
       }
     }
 
-    this.isCharsetUTF8 = isCharsetUTF8;
+    this.isCharsetUTF8 = rewriter.isCharsetUTF8;
+  }
+
+  detectMetaCharset(buffer: Uint8Array): string {
+    // only look at first bytes
+    const CHARSET_PEEK_SIZE = 1024;
+    const META_CHARSET_REGEX =
+      /<meta[^>]*charset\s*=\s*["']?([^"'\s>/]+)["']?[^>]*>/i;
+    const META_CHARSET_HTTP_EQUIV =
+      /<meta[^>]*http-equiv\s*=\s*["']?content-type["']?[^>]*content\s*=\s*["']?[^"']*charset\s*=\s*([^"'\s>/;]+)[^>]*>/i;
+
+    if (buffer.length > CHARSET_PEEK_SIZE) {
+      buffer = buffer.slice(0, CHARSET_PEEK_SIZE);
+    }
+    const text = new TextDecoder("latin1").decode(buffer);
+
+    // Look for meta charset attribute
+    const charsetMatch = text.match(META_CHARSET_REGEX);
+    if (charsetMatch?.[1]) {
+      return charsetMatch[1].toLowerCase();
+    }
+
+    // Look for meta http-equiv with charset in content
+    const httpEquivMatch = text.match(META_CHARSET_HTTP_EQUIV);
+    if (httpEquivMatch?.[1]) {
+      return httpEquivMatch[1].toLowerCase();
+    }
+
+    return "";
   }
 
   rewriteMetaContent(
@@ -215,7 +247,7 @@ export class HTMLRewriter {
       } else if (tagName === "meta" && name === "content") {
         attr.value = this.rewriteMetaContent(tag.attrs, attr, rewriter);
       } else if (tagName === "meta" && name === "charset") {
-        if (value && ["utf8", "utf-8"].includes(value.toLowerCase())) {
+        if (value && UTF_MATCH.includes(value.toLowerCase())) {
           this.isCharsetUTF8 = true;
         }
       } else if (tagName === "param" && isUrl(value)) {
@@ -273,9 +305,16 @@ export class HTMLRewriter {
             }
           }
         }
-      } else if (tagName === "embed") {
+      } else if (tagName === "embed" && name === "src") {
         const type = this.getAttr(tag.attrs, "type");
-        tag.tagName = type?.startsWith("image/") ? "img" : "iframe";
+        const isImg = type?.startsWith("image/");
+        tag.tagName = isImg ? "img" : "iframe";
+        attr.value = this.rewriteUrl(
+          rewriter,
+          value,
+          false,
+          isImg ? "mp_" : "if_",
+        );
       } else if (name === "target") {
         const target = attr.value;
 
@@ -331,16 +370,29 @@ export class HTMLRewriter {
   }
 
   async rewrite(response: ArchiveResponse) {
-    if (!response.buffer && !response.reader) {
-      //console.warn("Missing response body for: " + response.url);
+    let buffer = await response.getBuffer();
+    if (!buffer) {
       return response;
     }
 
-    if (response.expectedLength() > MAX_HTML_REWRITE_SIZE) {
-      console.warn(
-        "Skipping rewriting, HTML file too big: " + response.expectedLength(),
-      );
+    if (buffer.length > MAX_HTML_REWRITE_SIZE) {
+      console.warn("Skipping rewriting, HTML file too big: " + buffer.length);
       return response;
+    }
+
+    const { bomFound, text } = await response.getText(this.isCharsetUTF8, true);
+    if (bomFound) {
+      // make new buffer in UTF-8 with no BOM
+      buffer = new TextEncoder().encode(text);
+      this.isCharsetUTF8 = true;
+    }
+
+    // don't try to detect if already detected as UTF-8 or detected a charset via headers
+    if (!this.isCharsetUTF8 && !this.rewriter.isCharsetDetected) {
+      this.detectedCharset = this.detectMetaCharset(buffer);
+      if (UTF_MATCH.includes(this.detectedCharset)) {
+        this.isCharsetUTF8 = true;
+      }
     }
 
     const rewriter = this.rewriter;
@@ -360,6 +412,10 @@ export class HTMLRewriter {
 
     const addInsert = () => {
       if (!insertAdded && rewriter.headInsertFunc) {
+        // emit charset before rest of head insert to ensure its in the first 1024 bytes
+        if (this.detectedCharset) {
+          rwStream.emitRaw(`<meta charset="${this.detectedCharset}"/>`);
+        }
         const headInsert = rewriter.headInsertFunc(rewriter.url);
         if (headInsert) {
           rwStream.emitRaw(headInsert);
@@ -465,9 +521,6 @@ export class HTMLRewriter {
       }
     });
 
-    const sourceGen = response.createIter();
-    let hasData = false;
-
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const htmlrewriter = this;
 
@@ -489,17 +542,12 @@ export class HTMLRewriter {
             controller.close();
           });
 
-          for await (const chunk of sourceGen) {
-            if (htmlrewriter.isCharsetUTF8) {
-              rwStream.write(decoder.decode(chunk), "utf8");
-            } else {
-              rwStream.write(decodeLatin1(chunk), "latin1");
-            }
-            hasData = true;
+          if (htmlrewriter.isCharsetUTF8) {
+            rwStream.write(decoder.decode(buffer), "utf8");
+          } else {
+            rwStream.write(decodeLatin1(buffer), "latin1");
           }
-          if (hasData) {
-            addInsert();
-          }
+          addInsert();
 
           rwStream.end();
         },

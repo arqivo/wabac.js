@@ -24,7 +24,7 @@ export const DEFAULT_CSP = "default-src * 'unsafe-inline' 'unsafe-eval'; script-
 let fullCSP = DEFAULT_CSP;
 
 export function updateCSP(replayPrefix: string) {
-  fullCSP += "; child-src data: about: blob: " + replayPrefix;
+  fullCSP += `; frame-src data: about: blob: ${self.location.origin}${self.location.pathname} ${replayPrefix}`;
 }
 
 export function getCSP() {
@@ -317,6 +317,8 @@ export class AuthNeededError extends RangeError {}
 export class AccessDeniedError extends RangeError {}
 
 export class Canceled {}
+
+export class DeleteExpiredError {}
 
 export async function sleep(millis: number) {
   return new Promise((resolve) => setTimeout(resolve, millis));

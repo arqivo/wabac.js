@@ -285,6 +285,13 @@ test(
 );
 
 test(
+  "<meta> tag, no URL=",
+  rewriteHtml,
+  '<meta http-equiv="refresh" content="10;   /abc/def.html">',
+  '<meta http-equiv="refresh" content="10;   /prefix/20201226101010mp_/https://example.com/abc/def.html">',
+);
+
+test(
   "<meta> tag",
   rewriteHtml,
   '<meta http-equiv="Content-type" content="text/html; charset=utf-8" />',
@@ -296,6 +303,22 @@ test(
   rewriteHtml,
   '<meta http-equiv="refresh" content="text/html; charset=utf-8" />',
   '<meta http-equiv="refresh" content="text/html; charset=utf-8"/>',
+);
+
+test(
+  "meta charset with utf-8",
+  rewriteHtml,
+  '<html><head><title>test</title><meta charset="utf-8"/></head>Some Content ― испытание</html>',
+  '<html><head><title>test</title><meta charset="utf-8"/></head>Some Content ― испытание</html>',
+  { contentType: "text/html", encoding: "utf8" },
+);
+
+test(
+  "meta http-equiv charset with utf-8",
+  rewriteHtml,
+  '<html><head><title>test</title><meta http-equiv="refresh" content="text/html; charset=utf-8"/></head>Some Content ― испытание</html>',
+  '<html><head><title>test</title><meta http-equiv="refresh" content="text/html; charset=utf-8"/></head>Some Content ― испытание</html>',
+  { contentType: "text/html", encoding: "utf8" },
 );
 
 test(
@@ -600,6 +623,20 @@ test(
 );
 
 test(
+  "embed image",
+  rewriteHtml,
+  '<embed type="image/svg+xml" src="https://example.com/some/file.svg">',
+  '<img type="image/svg+xml" src="http://localhost:8080/prefix/20201226101010mp_/https://example.com/some/file.svg">',
+);
+
+test(
+  "embed other",
+  rewriteHtml,
+  '<embed src="https://example.com/some/file.pdf">',
+  '<iframe src="http://localhost:8080/prefix/20201226101010if_/https://example.com/some/file.pdf">',
+);
+
+test(
   "textarea text",
   rewriteHtml,
   "<textarea>&quot;loadOrderID&#x3d;0&amp;&quot;</textarea>",
@@ -658,6 +695,7 @@ test(
         "resources": "./javascript/resources.js",
         "javascript/resources": "./javascript/resources.js",
         "../javascript/resources": "./javascript/resources.js",
+        "resources/absolute": "https://example.com/javascript/resources.js",
         "https://example.com/resources": "./javascript/resources.js",
         "https://website.test.example.org/resources": "./javascript/resources.js",
         "https://xn--wbsite-bva.test.example.org/resources": "./javascript/resources.js",
@@ -672,6 +710,7 @@ test(
     "resources": "./javascript/resources.js",
     "javascript/resources": "./javascript/resources.js",
     "http://localhost:8080/prefix/20201226101010esm_/https://example.com/some/javascript/resources": "./javascript/resources.js",
+    "resources/absolute": "http://localhost:8080/prefix/20201226101010esm_/https://example.com/javascript/resources.js",
     "http://localhost:8080/prefix/20201226101010esm_/https://example.com/resources": "./javascript/resources.js",
     "http://localhost:8080/prefix/20201226101010esm_/https://website.test.example.org/resources": "./javascript/resources.js",
     "http://localhost:8080/prefix/20201226101010esm_/https://xn--wbsite-bva.test.example.org/resources": "./javascript/resources.js",

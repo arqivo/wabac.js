@@ -82,7 +82,7 @@ const rewriteJSImport = test.macro({
   },
 });
 
-function wrapScript(text: string) {
+function wrapScriptOpen(text: string) {
   return (
     `\
 var _____WB$wombat$assign$function_____ = function(name) {return (self._wb_wombat && self._wb_wombat.local_init && self._wb_wombat.local_init(name)) || self[name]; };
@@ -98,10 +98,12 @@ let parent = _____WB$wombat$assign$function_____("parent");
 let frames = _____WB$wombat$assign$function_____("frames");
 let opener = _____WB$wombat$assign$function_____("opener");
 let arguments;
-\n` +
-    text +
-    "\n\n}"
+\n` + text
   );
+}
+
+function wrapScript(text: string) {
+  return wrapScriptOpen(text) + "\n\n}";
 }
 
 function wrapImport(text: string) {
@@ -178,11 +180,41 @@ test(
   "location = ((self.__WB_check_loc && self.__WB_check_loc(location, arguments)) || {}).href = http://example.com/",
 );
 
+test(rewriteJSWrapped, 'location => "http://example.com/"');
+
 // acorn fails here, but is ignorable
 test(
   rewriteJSWrapped,
   " location = http://example.com/2",
   " location = ((self.__WB_check_loc && self.__WB_check_loc(location, arguments)) || {}).href = http://example.com/2",
+);
+
+test(
+  rewriteJS,
+  `
+  class A {}
+  const B = 5;
+  let C = 4;
+  var D = 3;
+
+  location = "http://example.com/2"`,
+
+  `let C;
+${wrapScriptOpen(`
+  class A {}
+  const B = 5;
+   C = 4;
+  var D = 3;
+
+  location = ((self.__WB_check_loc && self.__WB_check_loc(location, arguments)) || {}).href = "http://example.com/2"`)}
+;self.___WB_const_A = A;
+self.___WB_const_B = B;
+
+
+}
+const A = self.___WB_const_A; delete self.___WB_const_A;
+const B = self.___WB_const_B; delete self.___WB_const_B;
+`,
 );
 
 test(
@@ -221,9 +253,41 @@ test(
 
 // add global injection
 test(
-  rewriteJSWrapped,
-  "let a = document.location.href; var b = 5; const foo = 4;",
-  "let a = document.location.href; var b = 5; const foo = 4;\nself.a = a;\nself.foo = foo;",
+  rewriteJS,
+  "let a = document.location.href; var b = 5; const foo = 4",
+  `let a;\n${wrapScriptOpen(
+    ` a = document.location.href; var b = 5; const foo = 4`,
+  )}
+;self.___WB_const_foo = foo;
+
+
+}
+const foo = self.___WB_const_foo; delete self.___WB_const_foo;
+`,
+);
+
+// multiple globals on same line
+test(
+  rewriteJS,
+  `\
+let a = document.location.href, b = 1, c = 2;
+const foo = 4, bar = 5`,
+
+  `let a;
+let b;
+let c;
+${wrapScriptOpen(
+  ` a = document.location.href, b = 1, c = 2;
+const foo = 4, bar = 5`,
+)}
+;self.___WB_const_foo = foo;
+self.___WB_const_bar = bar;
+
+
+}
+const foo = self.___WB_const_foo; delete self.___WB_const_foo;
+const bar = self.___WB_const_bar; delete self.___WB_const_bar;
+`,
 );
 
 // import rewrite
@@ -280,6 +344,28 @@ export { a };
 a = _____WB$wombat$check$this$function_____(this).location
 
 export { a };
+`,
+);
+
+// rewrite import same line
+test(
+  rewriteJSImport,
+  `\
+import{A, B} from "https://example.com/";import{C, D} from "https://example.org"
+`,
+  `\
+import{A, B} from "http://localhost:8080/prefix/20201226101010esm_/https://example.com/";import{C, D} from "http://localhost:8080/prefix/20201226101010esm_/https://example.org/"
+`,
+);
+
+// rewrite import/export same line
+test(
+  rewriteJSImport,
+  `\
+import{A, B} from "https://example.com/";export{C, D} from "/some/path/to/file"
+`,
+  `\
+import{A, B} from "http://localhost:8080/prefix/20201226101010esm_/https://example.com/";export{C, D} from "http://localhost:8080/prefix/20201226101010esm_/https://example.com/some/path/to/file"
 `,
 );
 
@@ -361,6 +447,10 @@ test(rewriteJS, "this.$eval(a)", "");
 
 test(rewriteJS, "x = $eval; x(a);", "");
 
+test(rewriteJS, "static eval(a,b){ }", "");
+test(rewriteJS, "function eval(a,b){ }", "");
+test(rewriteJS, "} eval(a,b){ }", "");
+
 test(rewriteJSWrapped, "window.eval(a)", "");
 
 test(rewriteJSWrapped, "x = window.eval; x(a);", "");
@@ -439,6 +529,17 @@ test(
 a = location
 
 export{ a, $ as b };
+`,
+  "",
+);
+
+test(
+  rewriteJS,
+  `"use strict";(function() {
+    const text = \`
+export { a };
+\`;
+  })
 `,
   "",
 );

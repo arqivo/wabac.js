@@ -4,11 +4,11 @@ import * as acorn from "acorn";
 const IMPORT_RX = /^\s*?import\s*?[{"'*]/;
 const EXPORT_RX = /^\s*?export\s*?({([\s\w,$\n]+?)}[\s;]*|default|class)\s+/m;
 
-const IMPORT_MATCH_RX =
-  /^\s*?import(?:['"\s]*(?:[\w*${}\s,]+from\s*)?['"\s]?['"\s])(?:.*?)['"\s]/;
+const IMPORT_EXPORT_MATCH_RX =
+  /(^|;)\s*?(?:im|ex)port(?:['"\s]*(?:[\w*${}\s,]+from\s*)?['"\s]?['"\s])(?:.*?)['"\s]/;
 
-const IMPORT_HTTP_RX =
-  /(import(?:['"\s]*(?:[\w*${}\s,]+from\s*)?['"\s]?['"\s]))((?:https?|[./]).*?)(['"\s])/;
+const IMPORT_EXPORT_HTTP_RX =
+  /((?:im|ex)port(?:['"\s]*(?:[\w*${}\s,]+from\s*)?['"\s]?['"\s]))((?:https?|[./]).*?)(['"\s])/;
 
 const GLOBAL_OVERRIDES = [
   "window",
@@ -21,6 +21,8 @@ const GLOBAL_OVERRIDES = [
   "frames",
   "opener",
 ];
+
+const WORKER_GLOBAL_OVERRIDES = ["globalThis", "self", "location"];
 
 const GLOBALS_CONCAT_STR = GLOBAL_OVERRIDES.map(
   (x) => `(?:^|[^$.])\\b${x}\\b(?:$|[^$])`,
@@ -136,7 +138,10 @@ const createJSRules: () => Rule[] = () => {
 
   return [
     // rewriting 'eval(...)' - invocation
-    [/(?:^|\s)\beval\s*\(/, replacePrefixFrom(evalStr, "eval")],
+    [
+      /(?<!static|function|})(?:^|\s)\beval\s*\(/,
+      replacePrefixFrom(evalStr, "eval"),
+    ],
 
     [/\([\w]+,\s*eval\)\(/, () => " " + evalStr],
 
@@ -150,7 +155,7 @@ const createJSRules: () => Rule[] = () => {
 
     // rewriting 'location = ' to custom expression '(...).href =' assignment
     [
-      /(?:^|[^$.+*/%^-])\s?\blocation\b\s*[=]\s*(?![\s\d=])/,
+      /(?:^|[^$.+*/%^-])\s?\blocation\b\s*[=]\s*(?![\s\d=>])/,
       addSuffix(checkLoc),
     ],
 
@@ -228,6 +233,10 @@ if (!self.__WB_pmw) { self.__WB_pmw = function(obj) { this.__WB_source = obj; re
       return true;
     }
 
+    if (text.startsWith(`"use strict";(`)) {
+      return false;
+    }
+
     if (text.indexOf("export") >= 0 && text.match(EXPORT_RX)) {
       return true;
     }
@@ -235,19 +244,25 @@ if (!self.__WB_pmw) { self.__WB_pmw = function(obj) { this.__WB_source = obj; re
     return false;
   }
 
-  parseGlobals(text: string) {
+  parseGlobals(
+    text: string,
+    overrides: string[],
+  ): { names: { name: string; kind: string }[]; letOffsets: number[] } {
     const res = acorn.parse(text, { ecmaVersion: "latest" });
 
     let hasDocWrite = false;
 
-    const names: string[] = [];
+    const names: { name: string; kind: string }[] = [];
 
     const excludeOverrides = new Set();
+
+    const letOffsets: number[] = [];
+    let lastStart = -1;
 
     // [TODO]
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const expr of (res as any).body) {
-      const { type } = expr;
+      const { type, start } = expr;
       // Check global variable declarations
       if (type === "VariableDeclaration") {
         const { kind, declarations } = expr;
@@ -262,12 +277,24 @@ if (!self.__WB_pmw) { self.__WB_pmw = function(obj) { this.__WB_source = obj; re
 
             // [TODO]
             // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-            if (GLOBAL_OVERRIDES.includes(name)) {
+            if (overrides.includes(name)) {
               excludeOverrides.add(name);
             } else if (kind === "const" || kind === "let") {
-              names.push(`self.${name} = ${name};`);
+              names.push({ name, kind });
+              if (kind === "let") {
+                if (lastStart !== start) {
+                  letOffsets.unshift(start as number);
+                }
+                lastStart = start;
+              }
             }
           }
+        }
+        // Check for class declarations
+      } else if (type === "ClassDeclaration") {
+        if (expr.id && expr.id.type === "Identifier" && expr.id.name) {
+          const name = expr.id.name;
+          names.push({ name, kind: "const" });
         }
         // Check for document.write() calls
       } else if (!hasDocWrite && type === "ExpressionStatement") {
@@ -301,11 +328,7 @@ if (!self.__WB_pmw) { self.__WB_pmw = function(obj) { this.__WB_source = obj; re
       this.lastBuff = ";document.close();" + this.lastBuff;
     }
 
-    if (names.length) {
-      return "\n" + names.join("\n");
-    } else {
-      return "";
-    }
+    return { names, letOffsets };
   }
 
   // @ts-expect-error [TODO] - TS4114 - This member must have an 'override' modifier because it overrides a member in the base class 'RxRewriter'.
@@ -347,34 +370,87 @@ if (!self.__WB_pmw) { self.__WB_pmw = function(obj) { this.__WB_source = obj; re
 
     // @ts-expect-error [TODO] - TS4111 - Property 'isModule' comes from an index signature, so it must be accessed with ['isModule'].
     if (opts.isModule) {
-      // @ts-expect-error [TODO] - TS4111 - Property 'prefix' comes from an index signature, so it must be accessed with ['prefix'].
-      // [TODO]
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-      return this.getModuleDecl(GLOBAL_OVERRIDES, opts.prefix) + newText;
+      return (
+        // @ts-expect-error [TODO] - TS4111 - Property 'prefix' comes from an index signature, so it must be accessed with ['prefix'].
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        this.getModuleDecl(GLOBAL_OVERRIDES, opts.prefix) +
+        // @ts-expect-error [TODO] - TS4111 - Property 'prefix' comes from an index signature, so it must be accessed with ['moduleInsert'].
+        (opts.moduleInsert || "") +
+        newText
+      );
     }
 
-    const wrapGlobals = GLOBALS_RX.exec(text);
+    const wrapGlobals = !!GLOBALS_RX.exec(text);
 
     // @ts-expect-error [TODO] - TS4111 - Property 'inline' comes from an index signature, so it must be accessed with ['inline'].
     if (opts.inline) {
       newText = newText.replace(/\n/g, " ");
     }
 
-    
+    // @ts-expect-error ignore
+    const isWorker = opts.isWorker;
+
+    if (isWorker) {
+      // only do further rewriting if "location" is used in the worker script
+      if (text.indexOf("location") === -1) {
+        return newText;
+      }
+    }
 
     if (wrapGlobals) {
-      let hoistGlobals = "";
+      let firstBuff = this.firstBuff;
+      let overrides = GLOBAL_OVERRIDES;
+
+      if (isWorker) {
+        firstBuff = `{ const location = self._WB_wombat_location || self.location;\n`;
+        overrides = WORKER_GLOBAL_OVERRIDES;
+      }
+      let preScopeGlobals = "";
+      let inScopeGlobals = "";
+      let postScopeGlobals = "";
       if (newText) {
         try {
-            
-          hoistGlobals = this.parseGlobals(newText);
+          const { names: globalNames, letOffsets } = this.parseGlobals(
+            newText,
+            overrides,
+          );
+
+          for (const value of letOffsets) {
+            // remove "let" at each index
+            newText = newText.slice(0, value) + newText.slice(value + 3);
+          }
+
+          // set directly on global scope to avoid discrepancies between 'const X' and 'self.X' checks
+          for (const { name, kind } of globalNames) {
+            if (kind === "const") {
+              const varname = `self.___WB_const_${name}`;
+              inScopeGlobals += `${varname} = ${name};\n`;
+              postScopeGlobals += `${kind} ${name} = ${varname}; delete ${varname};\n`;
+            } else if (kind === "let") {
+              preScopeGlobals += `let ${name};\n`;
+              //newText = newText.replace(new RegExp("let\\s+" + name + "\\b"), name);
+            }
+          }
+          if (inScopeGlobals) {
+            inScopeGlobals = "\n;" + inScopeGlobals;
+          }
+          if (postScopeGlobals) {
+            postScopeGlobals = "\n" + postScopeGlobals;
+          }
           // [TODO]
           // eslint-disable-next-line @typescript-eslint/no-unused-vars
         } catch (e) {
           console.warn(`acorn parsing failed, script len ${newText.length}`);
         }
       }
-      newText = this.firstBuff + newText + hoistGlobals + this.lastBuff;
+
+      newText =
+        preScopeGlobals +
+        firstBuff +
+        newText +
+        inScopeGlobals +
+        this.lastBuff +
+        postScopeGlobals;
       // @ts-expect-error [TODO] - TS4111 - Property 'inline' comes from an index signature, so it must be accessed with ['inline'].
       if (opts.inline) {
         newText = newText.replace(/\n/g, " ");
@@ -393,7 +469,7 @@ if (!self.__WB_pmw) { self.__WB_pmw = function(obj) { this.__WB_source = obj; re
         // @ts-expect-error [TODO] - TS4111 - Property 'prefix' comes from an index signature, so it must be accessed with ['prefix'].
         const prefix = opts.prefix.replace("mp_/", "esm_/");
 
-        return x.replace(IMPORT_HTTP_RX, (_, g1, g2, g3) => {
+        return x.replace(IMPORT_EXPORT_HTTP_RX, (_, g1, g2, g3) => {
           try {
             // @ts-expect-error [TODO] - TS4111 - Property 'baseUrl' comes from an index signature, so it must be accessed with ['baseUrl'].
             // [TODO]
@@ -413,7 +489,7 @@ if (!self.__WB_pmw) { self.__WB_pmw = function(obj) { this.__WB_source = obj; re
     }
 
     // match and rewrite import statements
-    return [IMPORT_MATCH_RX, rewriteImport()];
+    return [IMPORT_EXPORT_MATCH_RX, rewriteImport()];
   }
 }
 

@@ -150,8 +150,8 @@ function getScriptCSSNotFound(
   msg?: string,
 ) {
   return `\
-/* 
-   ${msg ? msg : type + " Not Found"}
+/*
+   ${msg || type + " Not Found"}
    URL: ${requestURL}
    TS: ${requestTS}
 */
@@ -167,40 +167,55 @@ export function getProxyNotFoundResponse(url: string, status: number) {
 }
 
 function getHTMLNotProxyError(requestURL: string, status: number) {
-  return `
-  <!doctype html>
-  <html>
-  <head>
-  <script>
-  window.requestURL = "${requestURL}";
-  </script>
-  </head>
-  <body style="font-family: sans-serif">
-  <h2>Live page could not be loaded</h2>
-  <p>Sorry, this page was could not be loaded through the archiving proxy. Check the URL and try again.</p>
-  <p><code id="url" style="word-break: break-all; font-size: larger">Status Code: ${status}</code></p>
-  <p id="goback" style="display: none"><a href="#" onclick="window.history.back()">Go Back</a> to the previous page.</a></p>
+  return /* HTML */ `
+    <!doctype html>
+    <html>
+      <head>
+        <script>
+          window.requestURL = ${JSON.stringify(requestURL)};
+        </script>
+      </head>
+      <body style="font-family: sans-serif">
+        <h2>Live page could not be loaded</h2>
+        <p>
+          Sorry, this page was could not be loaded through the archiving proxy.
+          Check the URL and try again.
+        </p>
+        <p>
+          <code
+            id="url"
+            style="word-break: break-all; font-size: larger"
+          ></code>
+        </p>
+        <p id="goback" style="display: none">
+          <a href="#" onclick="window.history.back()">Go Back</a> to the
+          previous page.
+        </p>
 
-  <script>
-  let isTop = true;
-  try {
-    if (window.parent._WB_wombat_location) {
-      isTop = false;
-    }
-  } catch (e) {
+        <script>
+          document.getElementById("url").innerText = ${JSON.stringify(
+            `Status Code: ${status}`,
+          )};
+          let isTop = true;
+          try {
+            if (window.parent._WB_wombat_location) {
+              isTop = false;
+            }
+          } catch (e) {}
+          if (isTop) {
+            document.querySelector("#goback").style.display = "";
 
-  }
-  if (isTop) {
-    document.querySelector("#goback").style.display = "";
-
-    window.parent.postMessage({
-      wb_type: "live-proxy-url-error",
-      url: window.requestURL,
-      status: ${status},
-    }, "*");
-  }
-  </script>
-  </body>
-  </html>
+            window.parent.postMessage(
+              {
+                wb_type: "live-proxy-url-error",
+                url: window.requestURL,
+                status: ${JSON.stringify(status)},
+              },
+              "*",
+            );
+          }
+        </script>
+      </body>
+    </html>
   `;
 }

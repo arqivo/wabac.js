@@ -1,4 +1,5 @@
 import { XMLParser, XMLBuilder } from "fast-xml-parser";
+import { type ArchiveResponse } from "../response";
 
 // orig pywb defaults
 const OLD_DEFAULT_MAX_BAND = 2000000;
@@ -16,7 +17,8 @@ function getMaxResAndBand(opts: Record<string, any> = {}) {
   let maxRes, maxBand;
 
   // @ts-expect-error [TODO] - TS4111 - Property 'response' comes from an index signature, so it must be accessed with ['response'].
-  const extraOpts = opts.response?.extraOpts;
+  const response = opts.response as ArchiveResponse | null;
+  const extraOpts = response?.extraOpts;
 
   if (extraOpts) {
     maxRes = extraOpts.adaptive_max_resolution || extraOpts.maxRes;
@@ -59,12 +61,12 @@ export function rewriteHLS(text: string, opts: Record<string, any>) {
 
   const { maxRes, maxBand } = getMaxResAndBand(opts);
 
+  const maxValue = maxRes || maxBand;
+
   const indexes: number[] = [];
   let count = 0;
-  let bestIndex: number | null = null;
 
-  let bestBand = 0;
-  let bestRes = 0;
+  const allEntries: { value: number; index: number }[] = [];
 
   const lines = text.trimEnd().split("\n");
 
@@ -88,19 +90,29 @@ export function rewriteHLS(text: string, opts: Record<string, any>) {
     const m2 = line.match(EXT_RESOLUTION);
     const currRes = m2 ? Number(m2[1]) * Number(m2[2]) : 0;
 
-    if (currRes && maxRes) {
-      if (currRes <= maxRes && currRes > bestRes) {
-        bestRes = currRes;
-        bestBand = currBand;
-        bestIndex = count;
-      }
-    } else if (currBand <= maxBand && currBand > bestBand) {
-      bestRes = currRes;
-      bestBand = currBand;
-      bestIndex = count;
-    }
-
+    allEntries.push({ value: maxRes ? currRes : currBand, index: count });
     count += 1;
+  }
+
+  allEntries.sort((a, b) => a.value - b.value);
+
+  let bestIndex = null;
+  let bestValue = null;
+
+  for (const entry of allEntries) {
+    // stop if max exceeded
+    if (entry.value > maxValue) {
+      break;
+    }
+    // use first best value
+    if (bestValue != entry.value) {
+      bestValue = entry.value;
+      bestIndex = entry.index;
+    }
+  }
+  // use lowest available if max was exceeded
+  if (bestIndex === null && allEntries.length > 0) {
+    bestIndex = allEntries[0]!.index;
   }
 
   indexes.reverse();
