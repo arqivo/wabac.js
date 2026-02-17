@@ -244,6 +244,74 @@ if (!self.__WB_pmw) { self.__WB_pmw = function(obj) { this.__WB_source = obj; re
     return false;
   }
 
+  // For ES modules: parse the source to find top-level declarations that
+  // conflict with GLOBAL_OVERRIDES. These must be excluded from the injected
+  // import statement to avoid "Identifier '...' has already been declared".
+  getModuleOverrides(text: string): string[] {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = acorn.parse(text, {
+        ecmaVersion: "latest",
+        sourceType: "module",
+      }) as any;
+
+      const excludeOverrides = new Set<string>();
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const node of res.body) {
+        const { type } = node;
+
+        if (type === "FunctionDeclaration") {
+          if (
+            node.id &&
+            node.id.type === "Identifier" &&
+            GLOBAL_OVERRIDES.includes(node.id.name)
+          ) {
+            excludeOverrides.add(node.id.name);
+          }
+        } else if (type === "VariableDeclaration") {
+          for (const decl of node.declarations) {
+            if (
+              decl &&
+              decl.id &&
+              decl.id.type === "Identifier" &&
+              GLOBAL_OVERRIDES.includes(decl.id.name)
+            ) {
+              excludeOverrides.add(decl.id.name);
+            }
+          }
+        } else if (type === "ClassDeclaration") {
+          if (
+            node.id &&
+            node.id.type === "Identifier" &&
+            GLOBAL_OVERRIDES.includes(node.id.name)
+          ) {
+            excludeOverrides.add(node.id.name);
+          }
+        } else if (type === "ImportDeclaration") {
+          for (const spec of node.specifiers || []) {
+            if (
+              spec.local &&
+              spec.local.type === "Identifier" &&
+              GLOBAL_OVERRIDES.includes(spec.local.name)
+            ) {
+              excludeOverrides.add(spec.local.name);
+            }
+          }
+        }
+      }
+
+      if (excludeOverrides.size) {
+        return GLOBAL_OVERRIDES.filter((x) => !excludeOverrides.has(x));
+      }
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (e) {
+      // If parsing fails, return all overrides (current behavior)
+    }
+
+    return GLOBAL_OVERRIDES;
+  }
+
   parseGlobals(
     text: string,
     overrides: string[],
@@ -370,10 +438,11 @@ if (!self.__WB_pmw) { self.__WB_pmw = function(obj) { this.__WB_source = obj; re
 
     // @ts-expect-error [TODO] - TS4111 - Property 'isModule' comes from an index signature, so it must be accessed with ['isModule'].
     if (opts.isModule) {
+      const moduleOverrides = this.getModuleOverrides(text);
       return (
         // @ts-expect-error [TODO] - TS4111 - Property 'prefix' comes from an index signature, so it must be accessed with ['prefix'].
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-        this.getModuleDecl(GLOBAL_OVERRIDES, opts.prefix) +
+        this.getModuleDecl(moduleOverrides, opts.prefix) +
         // @ts-expect-error [TODO] - TS4111 - Property 'prefix' comes from an index signature, so it must be accessed with ['moduleInsert'].
         (opts.moduleInsert || "") +
         newText

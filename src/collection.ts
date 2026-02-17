@@ -409,6 +409,7 @@ ${disableMSE ? DISABLE_MEDIASOURCE_SCRIPT : ""}
       const scheme =
         referrer && referrer.indexOf("/http://") > 0 ? "http:" : "https:";
       url = scheme + url;
+      query.url = url;
     }
 
     try {

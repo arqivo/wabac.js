@@ -3,6 +3,7 @@ import { type ArchiveRequest } from "./request";
 import { ArchiveResponse } from "./response";
 import { type ExtraConfig, type DBStore } from "./types";
 import { RequestTracker } from "./requesttracker";
+import { getConfigValue } from "./configdb";
 
 declare let self: ServiceWorkerGlobalScope;
 
@@ -114,6 +115,12 @@ export class LiveProxy implements DBStore {
       prefix,
       true,
     );
+
+    // Read API key from IndexedDB and add as X-WA-KEY header
+    const waKey = await getConfigValue("api-key");
+    if (waKey) {
+      headers.set("X-WA-KEY", waKey);
+    }
 
     const fetchUrl = this.getFetchUrl(url, request, headers);
 

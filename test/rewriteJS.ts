@@ -414,6 +414,54 @@ B = await ____wb_rewrite_import__(import.meta.url, somefile);
 `,
 );
 
+// ESM module with top-level function 'parent' should exclude 'parent' from module decl import
+test(
+  rewriteJS,
+  `\
+import { something } from "https://example.com/lib.js";
+function parent(a, b) { return b.length < 2 ? a : b; }
+export { parent };
+`,
+  `\
+import { window, globalThis, self, document, location, top, frames, opener } from "http://localhost:8080/prefix/20201226101010mp_/__wb_module_decl.js";
+import { something } from "http://localhost:8080/prefix/20201226101010esm_/https://example.com/lib.js";
+function parent(a, b) { return b.length < 2 ? a : b; }
+export { parent };
+`,
+);
+
+// ESM module with top-level const 'document' should exclude 'document' from module decl import
+test(
+  rewriteJS,
+  `\
+import { x } from "./utils.js";
+const document = { title: "test" };
+export default document;
+`,
+  `\
+import { window, globalThis, self, location, top, parent, frames, opener } from "http://localhost:8080/prefix/20201226101010mp_/__wb_module_decl.js";
+import { x } from "http://localhost:8080/prefix/20201226101010esm_/https://example.com/some/path/utils.js";
+const document = { title: "test" };
+export default document;
+`,
+);
+
+// ESM module with import binding named 'top' should exclude 'top' from module decl import
+test(
+  rewriteJS,
+  `\
+import { top } from "https://example.com/helpers.js";
+console.log(top);
+export { top };
+`,
+  `\
+import { window, globalThis, self, document, location, parent, frames, opener } from "http://localhost:8080/prefix/20201226101010mp_/__wb_module_decl.js";
+import { top } from "http://localhost:8080/prefix/20201226101010esm_/https://example.com/helpers.js";
+console.log(top);
+export { top };
+`,
+);
+
 // Not Rewritten
 test(
   rewriteJS,
