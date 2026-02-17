@@ -454,12 +454,10 @@ ${disableMSE ? DISABLE_MEDIASOURCE_SCRIPT : ""}
     export { window, document, location, top, parent, frames, opener, __self as self, __globalThis as globalThis };
     `;
 
-    const payload = new TextEncoder().encode(string);
-
     const status = 200;
     const statusText = "OK";
     const headers = new Headers({ "Content-Type": "application/javascript" });
-    return new Response(payload, { headers, status, statusText });
+    return new Response(string, { headers, status, statusText });
   }
 
   getSrcDocResponse(url: string, base64str?: string) {
