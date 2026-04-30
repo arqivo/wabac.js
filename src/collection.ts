@@ -678,7 +678,7 @@ ${this.injectRelCanon ? `<link rel="canonical" href="${url}"/>` : ""}
     loc = decodeURI(loc);
 
     if (loc != decodeURI(wbinfo.top_url)) {
-        window.location.href = window.location.origin + '?action=redirect&coll=${coll}&url=${url}&timestamp=${timestamp}';
+        window.location.href = window.location.origin + '?action=redirect&coll=${coll}&url=${encodeURIComponent(url)}&timestamp=${timestamp}';
     }
   }
   wbinfo.url = "${url}";
