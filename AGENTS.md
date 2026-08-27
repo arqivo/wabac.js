@@ -2,6 +2,8 @@
 
 TypeScript library (fork/customization of `@webrecorder/wabac`) that provides web archive replay functionality. Runs as a service worker in the browser, intercepting navigation requests and replaying archived content from WARC files.
 
+**Fork divergence:** all Arqivo-specific patches on top of upstream are documented in [`docs/UPSTREAM-PATCHES.md`](docs/UPSTREAM-PATCHES.md) (code markers: `AQ-PATCH`, `aq_`). Read it before syncing with upstream, and add every new fork patch there.
+
 ## Local URL
 
 - **Dev server:** `http://localhost:9990` (Webpack dev server, serves built files from `/dist/`)

@@ -31,11 +31,148 @@ const GLOBALS_CONCAT_STR = GLOBAL_OVERRIDES.map(
 const GLOBALS_RX = new RegExp(`(${GLOBALS_CONCAT_STR})`);
 
 // ===========================================================================
+// AQ-PATCH(location-class-fields): bare `arguments` is a SyntaxError inside
+// class field initializers, static blocks and arrow functions nested in them.
+// The `location = ` rewrite emits `arguments`, which broke any bundle with a
+// class field named `location` (e.g. minified Angular Router). Compute the
+// ranges where `arguments` is illegal so the rule can adapt.
+// See docs/UPSTREAM-PATCHES.md before syncing with upstream.
+
+interface ArgZone {
+  start: number;
+  end: number;
+  ban: boolean;
+}
+
+interface ArgZoneInfo {
+  zones: ArgZone[];
+  // RHS start offsets of class fields literally named `location`
+  locFieldValueStarts: Set<number>;
+}
+
+function computeArgumentsIllegalZones(
+  text: string,
+  isModule: boolean,
+): ArgZoneInfo {
+  const zones: ArgZone[] = [];
+  const locFieldValueStarts = new Set<number>();
+
+  // class fields / static blocks require the `class` keyword
+  if (text.indexOf("class") < 0) {
+    return { zones, locFieldValueStarts };
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let root: any = null;
+
+  try {
+    root = acorn.parse(text, {
+      ecmaVersion: "latest",
+      sourceType: isModule ? "module" : "script",
+    });
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  } catch (e) {
+    // isModule detection can be wrong — retry with the other source type
+    try {
+      root = acorn.parse(text, {
+        ecmaVersion: "latest",
+        sourceType: isModule ? "script" : "module",
+      });
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (e2) {
+      // fall back to previous behavior (always rewrite with `arguments`)
+      return { zones, locFieldValueStarts };
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const visit = (node: any) => {
+    switch (node.type) {
+      case "PropertyDefinition":
+        if (node.value) {
+          zones.push({
+            start: node.value.start,
+            end: node.value.end,
+            ban: true,
+          });
+          if (
+            !node.computed &&
+            node.key &&
+            ((node.key.type === "Identifier" && node.key.name === "location") ||
+              (node.key.type === "Literal" && node.key.value === "location"))
+          ) {
+            locFieldValueStarts.add(node.value.start);
+          }
+        }
+        break;
+
+      case "StaticBlock":
+        zones.push({ start: node.start, end: node.end, ban: true });
+        break;
+
+      // non-arrow functions get their own `arguments` binding again
+      case "FunctionDeclaration":
+      case "FunctionExpression":
+        zones.push({ start: node.start, end: node.end, ban: false });
+        break;
+    }
+
+    for (const key of Object.keys(node)) {
+      if (key === "type" || key === "loc") {
+        continue;
+      }
+      const value = node[key];
+      if (Array.isArray(value)) {
+        for (const child of value) {
+          if (child && typeof child.type === "string") {
+            visit(child);
+          }
+        }
+      } else if (value && typeof value.type === "string") {
+        visit(value);
+      }
+    }
+  };
+
+  visit(root);
+
+  return { zones, locFieldValueStarts };
+}
+
+function argumentsIllegalAt(offset: number, info: ArgZoneInfo): boolean {
+  let innermost: ArgZone | null = null;
+
+  for (const zone of info.zones) {
+    if (zone.start <= offset && offset < zone.end) {
+      if (
+        !innermost ||
+        zone.start > innermost.start ||
+        (zone.start === innermost.start && zone.end < innermost.end) ||
+        (zone.start === innermost.start &&
+          zone.end === innermost.end &&
+          !zone.ban)
+      ) {
+        innermost = zone;
+      }
+    }
+  }
+
+  return !!innermost && innermost.ban;
+}
+// AQ-PATCH end
+
+// ===========================================================================
 const createJSRules: () => Rule[] = () => {
   const thisRw = "_____WB$wombat$check$this$function_____(this)";
 
   const checkLoc =
     "((self.__WB_check_loc && self.__WB_check_loc(location, arguments)) || {}).href = ";
+
+  // AQ-PATCH(location-class-fields): variant without `arguments` for contexts
+  // where the token itself is a SyntaxError (class field initializers, static
+  // blocks, arrows nested in them). Loses only param-shadow detection there.
+  const checkLocNoArgs =
+    "((self.__WB_check_loc && self.__WB_check_loc(location)) || {}).href = ";
 
   const evalStr =
     "WB_wombat_runEval2((_______eval_arg, isGlobal) => { var ge = eval; return isGlobal ? ge(_______eval_arg) : eval(_______eval_arg); }).eval(this, (function() { return arguments })(),";
@@ -70,6 +207,9 @@ const createJSRules: () => Rule[] = () => {
     };
   }
 
+  // AQ-PATCH(location-class-fields): no longer used (the only caller was the
+  // location= rule, now addCheckLocSuffix), kept to minimize upstream diff
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   function addSuffix(suffix: string) {
     return (
       x: string,
@@ -86,6 +226,48 @@ const createJSRules: () => Rule[] = () => {
         }
       }
       return x + suffix;
+    };
+  }
+
+  // AQ-PATCH(location-class-fields): like addSuffix(checkLoc), but skips class
+  // fields named `location` entirely (they are field definitions, not
+  // navigation) and uses the `arguments`-free variant where the token would be
+  // a SyntaxError. See docs/UPSTREAM-PATCHES.md.
+  function addCheckLocSuffix() {
+    return (
+      x: string,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      opts: Record<string, any>,
+      offset: number,
+      str: string,
+    ) => {
+      if (offset > 0) {
+        const prev = str[offset - 1];
+        if (prev === "." || prev === "$") {
+          return x;
+        }
+      }
+
+      // the regex consumes up to the start of the RHS, so the suffix is
+      // inserted exactly at the RHS start offset
+      const insertAt = offset + x.length;
+
+      // computed lazily on first location= match, cached per rewrite() call
+      let info = opts["_wbArgZones"] as ArgZoneInfo | undefined;
+      if (!info) {
+        info = computeArgumentsIllegalZones(str, !!opts["isModule"]);
+        opts["_wbArgZones"] = info;
+      }
+
+      if (argumentsIllegalAt(insertAt, info)) {
+        if (info.locFieldValueStarts.has(insertAt)) {
+          // class field named `location` — a definition, not an assignment
+          return x;
+        }
+        return x + checkLocNoArgs;
+      }
+
+      return x + checkLoc;
     };
   }
 
@@ -154,9 +336,10 @@ const createJSRules: () => Rule[] = () => {
     [/\.postMessage\b\(/, addPrefix(".__WB_pmw(self)")],
 
     // rewriting 'location = ' to custom expression '(...).href =' assignment
+    // AQ-PATCH(location-class-fields): context-aware callback, see above
     [
       /(?:^|[^$.+*/%^-])\s?\blocation\b\s*[=]\s*(?![\s\d=>])/,
-      addSuffix(checkLoc),
+      addCheckLocSuffix(),
     ],
 
     // rewriting 'return this'
@@ -249,10 +432,10 @@ if (!self.__WB_pmw) { self.__WB_pmw = function(obj) { this.__WB_source = obj; re
   // import statement to avoid "Identifier '...' has already been declared".
   getModuleOverrides(text: string): string[] {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const res = acorn.parse(text, {
         ecmaVersion: "latest",
         sourceType: "module",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       }) as any;
 
       const excludeOverrides = new Set<string>();
@@ -403,14 +586,18 @@ if (!self.__WB_pmw) { self.__WB_pmw = function(obj) { this.__WB_source = obj; re
   // [TODO]
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   rewrite(text: string, opts: Record<string, any>) {
-
-    if (text && text.indexOf('aq_no_wombat_rewrite') >= 0) {
-        return text;
+    if (text && text.indexOf("aq_no_wombat_rewrite") >= 0) {
+      return text;
     }
 
     // [TODO]
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     opts = opts || {};
+
+    // AQ-PATCH(location-class-fields): zones are per-file; opts may be reused
+    // across multiple (inline) scripts, so reset the lazy cache each call
+    opts["_wbArgZones"] = undefined;
+
     // @ts-expect-error [TODO] - TS4111 - Property 'isModule' comes from an index signature, so it must be accessed with ['isModule']. | TS4111 - Property 'isModule' comes from an index signature, so it must be accessed with ['isModule'].
     if (opts.isModule === undefined || opts.isModule === null) {
       // @ts-expect-error [TODO] - TS4111 - Property 'isModule' comes from an index signature, so it must be accessed with ['isModule'].

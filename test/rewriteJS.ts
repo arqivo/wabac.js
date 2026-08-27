@@ -217,6 +217,48 @@ const B = self.___WB_const_B; delete self.___WB_const_B;
 `,
 );
 
+// AQ-PATCH(location-class-fields) regression tests — see docs/UPSTREAM-PATCHES.md
+// class field named `location` (minified Angular Router pattern) must NOT be
+// rewritten: injected `arguments` is a SyntaxError in field initializers
+test(
+  rewriteJSImport,
+  `import "foo";
+class X{parentContexts=w(r2);location=w(jn);changeDetector=w(Vn)}`,
+  "",
+);
+
+// same, non-module script (class expression avoids top-level class hoisting)
+test(rewriteJSWrapped, "var X=class{location=w(a)};", "");
+
+// real `location =` assignment inside a static block: rewritten, but with the
+// `arguments`-free variant (bare `arguments` is illegal there)
+test(
+  rewriteJSImport,
+  `import "foo";
+class X{static{location=f()}}`,
+  `import "foo";
+class X{static{location=((self.__WB_check_loc && self.__WB_check_loc(location)) || {}).href = f()}}`,
+);
+
+// real `location =` assignment in an arrow function assigned to a class field:
+// also `arguments`-free (arrows have no own `arguments` binding)
+test(
+  rewriteJSImport,
+  `import "foo";
+class X{go=()=>{location=f()}}`,
+  `import "foo";
+class X{go=()=>{location=((self.__WB_check_loc && self.__WB_check_loc(location)) || {}).href = f()}}`,
+);
+
+// a normal function in a class field re-legalizes `arguments`: full rewrite
+test(
+  rewriteJSImport,
+  `import "foo";
+class X{go=function(){location=f()}}`,
+  `import "foo";
+class X{go=function(){location=((self.__WB_check_loc && self.__WB_check_loc(location, arguments)) || {}).href = f()}}`,
+);
+
 test(
   rewriteJS,
   " eval(a)",
