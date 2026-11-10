@@ -53,6 +53,25 @@ field, function in field).
 - **`checkLoc` uses `.href`** while upstream `main` uses `.maybeHref` — upstream
   change we have not adopted yet (requires wombat with `maybeHref` support).
 
+## wombat source patches (`build/aq-wombat-patches.cjs`)
+
+webpack loader on `@webrecorder/wombat/src/wombat.js` (rule in `webpack.config.cjs`, wombat
+build). Exact string replacements that must match exactly once, else the build fails. The same
+bugs are patched in wa-replay (`src/rewrite/wombatPatches.ts`, against the npm dist bundle).
+
+### AQ-PATCH(proxy-get-symbol) — 2026-11-10
+
+**Problem:** `Wombat.defaultProxyGet` (window/document proxy `get` trap) runs `parseInt(prop)`
+whenever the value is a non-empty string (its `frames[N]` check). A Symbol key throws
+`TypeError: Cannot convert a Symbol value to a string`. `window[Symbol.toStringTag]` is
+`"Window"`, and lodash `getRawTag` reads exactly that → the calling bundle dies. Seen on
+expertisecentrumoverijssel.nl/podcast/ (Divi etCore init aborted, filterable-portfolio tiles
+stayed hidden).
+
+**Fix:** `var asNum = typeof prop === 'symbol' ? NaN : parseInt(prop);` — the string is returned
+as-is. **Tests:** `test/wombatPatches.ts`. **Upstream status:** same code in wombat 3.10.8
+(2026-11-10); propose upstream.
+
 ## Other fork commits on top of v2.24.5 (outside the rewriter)
 
 | Commit | What |
@@ -65,7 +84,8 @@ field, function in field).
 
 ## Sync checklist
 
-1. `grep -rn "AQ-PATCH\|aq_" src/ test/` — every hit must survive the merge.
+1. `grep -rn "AQ-PATCH\|aq_" src/ test/ build/` — every hit must survive the merge (wombat
+   upgrades: `yarn build` fails if a `build/aq-wombat-patches.cjs` patch stops matching).
 2. Re-run `npx ava` (all suites) — the AQ regression tests must pass.
 3. Re-check the "Upstream status" notes above — patches may have landed upstream.
 4. Update this file: new patches, new upstream base version, re-check dates.

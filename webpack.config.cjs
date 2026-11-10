@@ -46,6 +46,11 @@ const wombatBuild = {
           onlyCompileBundledFiles: false,
         },
       },
+      {
+        // AQ-PATCH source patches on wombat (build/aq-wombat-patches.cjs)
+        test: /[\\/]@webrecorder[\\/]wombat[\\/]src[\\/]wombat\.js$/,
+        loader: path.resolve(__dirname, "build/aq-wombat-patches.cjs"),
+      },
     ],
   },
 };
